@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SONIC-SCAN Pro 5.0</title>
+    <style>
+        body { 
+            font-family: 'Courier New', Courier, monospace; background: #0b0b0b; color: #00ff00; 
+            margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; touch-action: none;
+        }
+        header { padding: 8px; border-bottom: 1px solid #004400; text-align: center; font-size: 0.7em; background: #000; }
+        
+        #viewport {
+            flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #050505; position: relative;
+        }
+        #receiverCanvas { 
+            width: 80vw; height: 80vw; max-width: 340px; max-height: 340px;
+            border: 2px solid #00ff00; image-rendering: pixelated; background: #000;
+        }
+
+        #freqVisualizer { width: 100%; height: 45px; background: #000; border-top: 1px solid #004400; border-bottom: 1px solid #004400; }
+
+        .info-panel { font-size: 11px; padding: 10px; text-align: center; color: #00ff00; font-weight: bold; }
+
+        .pixel-selector {
+            background: #111; padding: 10px; display: flex; justify-content: center; align-items: center; gap: 15px;
+        }
+        select { background: #000; color: #00ff00; border: 1px solid #00ff00; padding: 5px; font-family: monospace; }
+
+        .controls { background: #111; padding: 15px; border-top: 1px solid #004400; }
+        .btn-group { display: flex; gap: 5px; justify-content: center; }
+        
+        button { 
+            background: #002200; color: #00ff00; border: 1px solid #00ff00;
+            padding: 10px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 10px; flex: 1;
+        }
+        #btnSend { background: #004400; }
+        #btnCancel { background: #440000; color: #ff0000; border-color: #ff0000; display: none; }
+
+        input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+
+<header>SONIC-SCAN 5.0 // DYNAMIC RESOLUTION</header>
+
+<div id="viewport">
+    <canvas id="receiverCanvas"></canvas>
+    <div class="info-panel" id="timerInfo">TEMPS : 0s | RÉSOL : 40x40</div>
+</div>
+
+<canvas id="freqVisualizer"></canvas>
+
+<div class="pixel-selector">
+    <span>PIXELS :</span>
+    <select id="resSelect" onchange="changeRes()">
+        <option value="10">10 x 10 (Ultra Rapide)</option>
+        <option value="20">20 x 20 (Rapide)</option>
+        <option value="40" selected>40 x 40 (Standard)</option>
+        <option value="60">60 x 60 (Détaillé)</option>
+        <option value="80">80 x 80 (Lent)</option>
+    </select>
+</div>
+
+<div class="controls">
+    <div class="btn-group">
+        <button onclick="document.getElementById('fileInput').click()">📁 IMAGE</button>
+        <button id="btnListen" onclick="initAudio()">📡 RADAR</button>
+        <button id="btnSend" onclick="transmitImage()" style="display:none;">🚀 ENVOYER</button>
+        <button id="btnCancel" onclick="cancelTransmission()">🛑 STOP</button>
+        <button onclick="calibrateNoise()">🧹 FILTRE</button>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" onchange="loadFile(event)">
+</div>
+
+<script>
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const canvas = document.getElementById('receiverCanvas');
+    const ctx = canvas.getContext('2d');
+    const vCanvas = document.getElementById('freqVisualizer');
+    const vCtx = vCanvas.getContext('2d');
+
+    let IMG_SIZE = 40; 
+    canvas.width = IMG_SIZE; canvas.height = IMG_SIZE;
+
+    let sourceImg = null, currentZoom = 1;
+    let analyser, dataArray, streamSource;
+    let gainNode = audioCtx.createGain();
+    gainNode.connect(audioCtx.destination);
+    gainNode.gain.value = 0.3;
+
+    let isTransmitting = false;
+    let noiseThreshold = 50;
+    let currentOscs = [];
+
+    const FREQ_START = 18500; 
+    const STEP = 45;
+    const NOTE_DUR = 0.035;
+
+    // --- ZOOM TACTILE ---
+    let lastDist = 0;
+    canvas.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 2) {
+            let dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+            if (lastDist > 0) {
+                currentZoom = Math.min(Math.max(1, currentZoom + (dist - lastDist) * 0.02), 10);
+                updatePreview();
+            }
+            lastDist = dist;
+        }
+    }, {passive: false});
+    canvas.addEventListener('touchend', () => lastDist = 0);
+    canvas.addEventListener('wheel', (e) => {
+        currentZoom = Math.min(Math.max(1, currentZoom + e.deltaY * -0.005), 10);
+        updatePreview();
+    });
+
+    function changeRes() {
+        IMG_SIZE = parseInt(document.getElementById('resSelect').value);
+        canvas.width = IMG_SIZE;
+        canvas.height = IMG_SIZE;
+        updatePreview();
+    }
+
+    function loadFile(event) {
+        const file = event.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            sourceImg = new Image();
+            sourceImg.onload = () => { currentZoom = 1; updatePreview(); document.getElementById('btnSend').style.display = "block"; };
+            sourceImg.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function updatePreview() {
+        if (!sourceImg) return;
+        const size = Math.min(sourceImg.width, sourceImg.height) / currentZoom;
+        const x = (sourceImg.width - size) / 2;
+        const y = (sourceImg.height - size) / 2;
+        ctx.fillStyle = "#000"; ctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
+        ctx.drawImage(sourceImg, x, y, size, size, 0, 0, IMG_SIZE, IMG_SIZE);
+        
+        const totalSec = (IMG_SIZE * IMG_SIZE * NOTE_DUR) + 0.5;
+        document.getElementById('timerInfo').innerText = `TEMPS : ${totalSec.toFixed(1)}s | RÉSOL : ${IMG_SIZE}x${IMG_SIZE}`;
+    }
+
+    // --- AUDIO & VISUALIZER ---
+    function initAudio() {
+        audioCtx.resume();
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            streamSource = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;
+            streamSource.connect(analyser);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            drawVis();
+            listenLoop();
+            document.getElementById('btnListen').style.background = "#00ff00";
+            document.getElementById('btnListen').style.color = "#000";
+        });
+    }
+
+    function drawVis() {
+        requestAnimationFrame(drawVis);
+        if(!analyser) return;
+        analyser.getByteFrequencyData(dataArray);
+        vCanvas.width = vCanvas.clientWidth; vCanvas.height = vCanvas.clientHeight;
+        vCtx.fillStyle = '#000'; vCtx.fillRect(0,0,vCanvas.width,vCanvas.height);
+        const barW = vCanvas.width / dataArray.length;
+        for(let i=0; i<dataArray.length; i++) {
+            vCtx.fillStyle = '#00ff00';
+            vCtx.fillRect(i*barW, vCanvas.height - dataArray[i]/2, barW-1, dataArray[i]/2);
+        }
+    }
+
+    function transmitImage() {
+        if (isTransmitting) return;
+        isTransmitting = true;
+        if (streamSource) streamSource.disconnect();
+        document.getElementById('btnSend').style.display = "none";
+        document.getElementById('btnCancel').style.display = "block";
+
+        const pixels = ctx.getImageData(0, 0, IMG_SIZE, IMG_SIZE).data;
+        let time = audioCtx.currentTime + 0.2;
+
+        playNote(20000, time, 0.4); 
+        time += 0.5;
+
+        for (let i = 0; i < pixels.length; i += 4) {
+            if (!isTransmitting) break;
+            const gray = (pixels[i] + pixels[i+1] + pixels[i+2]) / 3;
+            playNote(FREQ_START + (gray * STEP), time, NOTE_DUR - 0.005);
+            time += NOTE_DUR;
+        }
+        setTimeout(() => { if(isTransmitting) stopUI(); }, (time - audioCtx.currentTime) * 1000);
+    }
+
+    function playNote(f, s, d) {
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.frequency.setValueAtTime(f, s);
+        g.gain.setValueAtTime(0, s);
+        g.gain.linearRampToValueAtTime(1, s + 0.01);
+        g.gain.linearRampToValueAtTime(0, s + d);
+        osc.connect(g); g.connect(gainNode);
+        osc.start(s); osc.stop(s + d);
+        currentOscs.push(osc);
+    }
+
+    function cancelTransmission() {
+        isTransmitting = false;
+        currentOscs.forEach(o => { try{o.stop()}catch(e){} });
+        currentOscs = [];
+        stopUI();
+    }
+
+    function stopUI() {
+        isTransmitting = false;
+        document.getElementById('btnSend').style.display = "block";
+        document.getElementById('btnCancel').style.display = "none";
+        updatePreview();
+        if (streamSource && analyser) streamSource.connect(analyser);
+    }
+
+    function calibrateNoise() {
+        if(!analyser) return;
+        let max = 0;
+        const i = setInterval(() => {
+            analyser.getByteFrequencyData(dataArray);
+            max = Math.max(max, ...dataArray);
+        }, 10);
+        setTimeout(() => { clearInterval(i); noiseThreshold = max + 10; alert("OK"); }, 1000);
+    }
+
+    function listenLoop() {
+        let x=0, y=0, rx=false;
+        function check() {
+            if (isTransmitting || !analyser) { requestAnimationFrame(check); return; }
+            analyser.getByteFrequencyData(dataArray);
+            let mV=0, mI=-1;
+            for(let i=0; i<dataArray.length; i++){ if(dataArray[i]>mV){mV=dataArray[i]; mI=i;}}
+            const f = mI * (audioCtx.sampleRate / 2) / dataArray.length;
+
+            if(!rx && Math.abs(f - 20000) < 100 && mV > 120) {
+                rx = true; x=0; y=0;
+                ctx.fillStyle="#000"; ctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
+            }
+            if(rx && mV > noiseThreshold && f >= FREQ_START && f < 20000) {
+                const v = Math.round((f - FREQ_START) / STEP);
+                ctx.fillStyle = `rgb(${v},${v},${v})`;
+                ctx.fillRect(x, y, 1, 1);
+                x++; if(x >= IMG_SIZE){ x=0; y++; }
+                if(y >= IMG_SIZE) rx = false;
+            }
+            requestAnimationFrame(check);
+        }
+        check();
+    }
+</script>
+</body>
+</html>
