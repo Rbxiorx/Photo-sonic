@@ -3,139 +3,91 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SONIC-SCAN 5.5 - ULTRA SYNC</title>
+    <title>SONIC-SCAN BINARY 6.0</title>
     <style>
-        body { font-family: monospace; background: #000; color: #0f0; margin: 0; overflow: hidden; }
-        #viewport { display: flex; flex-direction: column; align-items: center; padding: 10px; height: 100vh; }
-        canvas { border: 2px solid #0f0; width: 320px; height: 320px; background: #050505; image-rendering: pixelated; margin-bottom: 10px; }
-        .controls { background: #111; border-top: 1px solid #0f0; padding: 15px; width: 100%; position: fixed; bottom: 0; box-sizing: border-box; }
-        button { background: #002200; color: #0f0; border: 1px solid #0f0; padding: 12px; font-weight: bold; flex: 1; cursor: pointer; }
-        .ui-row { display: flex; gap: 10px; margin-bottom: 10px; }
-        #status { font-size: 11px; color: #ff0; margin-bottom: 10px; text-transform: uppercase; }
-        #vis { width: 100%; height: 30px; background: #000; margin-top: 5px; }
+        body { font-family: monospace; background: #000; color: #0f0; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        canvas { border: 2px solid #0f0; width: 300px; height: 300px; background: #050505; image-rendering: pixelated; margin: 20px auto; }
+        .controls { background: #111; padding: 20px; border-top: 1px solid #0f0; }
+        button { background: #002200; color: #0f0; border: 1px solid #0f0; padding: 15px; width: 100%; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
+        #status { font-size: 12px; text-align: center; color: #fff; min-height: 20px; }
+        .binary-log { font-size: 8px; color: #004400; overflow: hidden; height: 40px; text-align: center; }
     </style>
 </head>
 <body>
 
-<div id="viewport">
-    <canvas id="mainCanvas"></canvas>
-    <div id="status">SYSTÈME PRÊT</div>
-    <canvas id="vis"></canvas>
-</div>
+<div id="status">SYSTÈME BINAIRE PRÊT</div>
+<canvas id="mainCanvas"></canvas>
+<div class="binary-log" id="log">01010100110101...</div>
 
 <div class="controls">
-    <div class="ui-row">
-        <select id="res" onchange="initCanvas()" style="background:#000; color:#0f0; border:1px solid #0f0; flex:1;">
-            <option value="20">20x20 (Rapide)</option>
-            <option value="40" selected>40x40 (Moyen)</option>
-            <option value="64">64x64 (Détaillé)</option>
-        </select>
-        <button onclick="document.getElementById('f').click()">📷 CHARGER</button>
-    </div>
-    <div class="ui-row">
-        <button id="btnRadar" onclick="startMic()">📡 ACTIVER RADAR</button>
-        <button id="btnSend" onclick="send()" style="display:none; background:#040;">🚀 ÉMETTRE</button>
-        <button onclick="location.reload()" style="flex:0.5;">🔄</button>
-    </div>
     <input type="file" id="f" accept="image/*" onchange="loadImg(event)" style="display:none">
+    <button onclick="document.getElementById('f').click()">📁 CHARGER L'IMAGE</button>
+    <button id="btnRadar" onclick="startMic()">📡 ACTIVER RÉCEPTION</button>
+    <button id="btnSend" onclick="send()" style="display:none; background:#040;">🚀 ENVOYER (0/1)</button>
 </div>
 
 <script>
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 const canvas = document.getElementById('mainCanvas');
-const ctx = canvas.getContext('2d', {alpha: false});
-const vCanvas = document.getElementById('vis');
-const vCtx = vCanvas.getContext('2d');
+const ctx = canvas.getContext('2d');
+const size = 32; // On utilise une base 2 pour le numérique
+canvas.width = size; canvas.height = size;
 
-let size = 40;
-let sourceImg = null;
-let isRx = false;
-
-// Fréquences sécurisées pour éviter les bruits ambiants
-const F_SYNC = 17000;  // Signal de début de ligne (TRES IMPORTANT)
-const F_START = 18000; // Fréquence pour Pixel Noir
-const STEP = 25;       // Écart entre chaque nuance de gris
-const DUR = 0.05;      // Temps par pixel (un peu plus lent pour la stabilité)
-
-function initCanvas() {
-    size = parseInt(document.getElementById('res').value);
-    canvas.width = size; canvas.height = size;
-    ctx.fillStyle = "#000"; ctx.fillRect(0,0,size,size);
-}
-initCanvas();
+const F_SYNC = 500;  // Top départ pixel
+const F_ZERO = 1000; // Bit 0
+const F_ONE = 2000;  // Bit 1
+const BIT_DUR = 0.02; // Très rapide car numérique
 
 function loadImg(e) {
     const r = new FileReader();
     r.onload = (ev) => {
-        sourceImg = new Image();
-        sourceImg.onload = () => {
-            ctx.drawImage(sourceImg, 0, 0, size, size);
+        const img = new Image();
+        img.onload = () => {
+            ctx.drawImage(img, 0, 0, size, size);
             document.getElementById('btnSend').style.display = "block";
-            document.getElementById('status').innerText = "IMAGE CHARGÉE";
         };
-        sourceImg.src = ev.target.result;
+        img.src = ev.target.result;
     };
     r.readAsDataURL(e.target.files[0]);
 }
 
 async function startMic() {
     await audioCtx.resume();
-    // On force la désactivation de TOUT traitement logiciel qui déforme le son
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
-    });
-    
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048; 
+    analyser.fftSize = 1024;
     source.connect(analyser);
     const data = new Uint8Array(analyser.frequencyBinCount);
-    
-    document.getElementById('btnRadar').innerText = "📡 RADAR ON";
-    document.getElementById('status').innerText = "ÉCOUTE EN COURS...";
 
-    let x = 0, y = 0;
-    let lastSyncTime = 0;
+    let x = 0, y = 0, bits = "";
 
     function loop() {
         analyser.getByteFrequencyData(data);
-        
-        // Visualiseur de signal
-        vCanvas.width = vCanvas.clientWidth;
-        vCtx.fillStyle="#000"; vCtx.fillRect(0,0,vCanvas.width, 30);
-        vCtx.fillStyle="#0f0";
-        for(let i=0; i<data.length; i+=10) vCtx.fillRect(i/2, 30, 1, -data[i]/4);
-
         let maxV = 0, maxFIdx = 0;
-        for(let i=0; i<data.length; i++) {
-            if(data[i] > maxV) { maxV = data[i]; maxFIdx = i; }
-        }
-        
+        for(let i=0; i<data.length; i++) { if(data[i] > maxV) { maxV = data[i]; maxFIdx = i; } }
         const freq = maxFIdx * (audioCtx.sampleRate / 2) / data.length;
 
-        if (maxV > 100) { 
-            // DÉTECTION DE LA SYNCHRO (RESET DE LA LIGNE)
-            if (Math.abs(freq - F_SYNC) < 60) {
-                const now = Date.now();
-                if (now - lastSyncTime > 100) { // Anti-rebond
-                    x = 0; 
-                    if (isRx) y++;
-                    isRx = true;
-                    lastSyncTime = now;
-                    document.getElementById('status').innerText = `RÉCEPTION LIGNE ${y+1}`;
-                }
-            } 
-            // DÉTECTION PIXEL
-            else if (isRx && freq >= F_START && freq < 21000) {
-                const val = Math.round((freq - F_START) / STEP);
-                ctx.fillStyle = `rgb(${val},${val},${val})`;
-                ctx.fillRect(x, y, 1, 1);
-                x++;
-                if(x >= size) { x = 0; } // On attend la prochaine synchro pour changer de ligne
-            }
+        if (maxV > 120) {
+            if (Math.abs(freq - F_SYNC) < 100) { bits = ""; } // Reset pour nouveau pixel
+            else if (Math.abs(freq - F_ZERO) < 100) { bits += "0"; checkPixel(); }
+            else if (Math.abs(freq - F_ONE) < 100) { bits += "1"; checkPixel(); }
         }
 
-        if(y >= size) { isRx = false; document.getElementById('status').innerText = "TERMINÉ"; }
+        function checkPixel() {
+            // Ici, on pourrait envoyer 8 bits par couleur, mais pour rester simple
+            // on va envoyer 1 bit pour Noir/Blanc ou 3 bits pour Couleur Simple
+            if (bits.length === 3) { // Mode 3 bits (R, G, B)
+                let r = bits[0] === "1" ? 255 : 0;
+                let g = bits[1] === "1" ? 255 : 0;
+                let b = bits[2] === "1" ? 255 : 0;
+                ctx.fillStyle = `rgb(${r},${g},${b})`;
+                ctx.fillRect(x, y, 1, 1);
+                document.getElementById('log').innerText += bits;
+                x++; if(x >= size){ x=0; y++; }
+                bits = "";
+            }
+        }
         requestAnimationFrame(loop);
     }
     loop();
@@ -143,20 +95,17 @@ async function startMic() {
 
 function send() {
     const pixels = ctx.getImageData(0, 0, size, size).data;
-    let now = audioCtx.currentTime + 0.2;
-    document.getElementById('status').innerText = "TRANSMISSION...";
-    
-    for (let y = 0; y < size; y++) {
-        // SIGNAL DE SYNCHRO : Plus long et plus fort pour caler l'autre téléphone
-        play(F_SYNC, now, 0.1); 
-        now += 0.12; 
+    let now = audioCtx.currentTime + 0.1;
 
-        for (let x = 0; x < size; x++) {
-            const i = (y * size + x) * 4;
-            const gray = (pixels[i] + pixels[i+1] + pixels[i+2]) / 3;
-            play(F_START + (gray * STEP), now, DUR - 0.01);
-            now += DUR;
-        }
+    for (let i = 0; i < pixels.length; i += 4) {
+        // Sync pixel
+        play(F_SYNC, now, 0.01); now += 0.02;
+        // Bit Rouge
+        play(pixels[i] > 128 ? F_ONE : F_ZERO, now, BIT_DUR); now += BIT_DUR + 0.01;
+        // Bit Vert
+        play(pixels[i+1] > 128 ? F_ONE : F_ZERO, now, BIT_DUR); now += BIT_DUR + 0.01;
+        // Bit Bleu
+        play(pixels[i+2] > 128 ? F_ONE : F_ZERO, now, BIT_DUR); now += BIT_DUR + 0.01;
     }
 }
 
@@ -165,7 +114,7 @@ function play(f, s, d) {
     const g = audioCtx.createGain();
     o.frequency.setValueAtTime(f, s);
     g.gain.setValueAtTime(0, s);
-    g.gain.linearRampToValueAtTime(0.7, s + 0.005);
+    g.gain.linearRampToValueAtTime(0.5, s + 0.005);
     g.gain.linearRampToValueAtTime(0, s + d);
     o.connect(g); g.connect(audioCtx.destination);
     o.start(s); o.stop(s + d);
