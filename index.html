@@ -2,174 +2,160 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SonicChat Pro - Fast Mode</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>SonicChat Pro - WhatsApp Style</title>
     <style>
         * { box-sizing: border-box; }
         body { font-family: sans-serif; background: #0b141a; color: #e9edef; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        header { background: #202c33; padding: 15px; text-align: center; font-weight: bold; color: #00a884; border-bottom: 1px solid #3b4a54; }
-        #chat-window { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; background-image: radial-gradient(#202c33 1px, transparent 1px); background-size: 20px 20px; }
-        .bubble { max-width: 80%; padding: 10px 15px; border-radius: 15px; font-size: 16px; animation: fadeIn 0.2s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+        
+        /* BARRE DE SPECTRE (SON) */
+        #spectrum { height: 4px; width: 100%; display: flex; background: #182229; }
+        .spec-bar { flex: 1; height: 100%; transition: background 0.1s; }
+
+        header { 
+            background: #202c33; 
+            padding: calc(env(safe-area-inset-top) + 10px) 15px 15px 15px; 
+            text-align: center; font-weight: bold; color: #00a884; border-bottom: 1px solid #3b4a54; 
+        }
+
+        #chat-window { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+        
+        .bubble { max-width: 80%; padding: 10px 15px; border-radius: 15px; font-size: 16px; position: relative; }
         .sent { align-self: flex-end; background: #005c4b; border-bottom-right-radius: 2px; }
         .received { align-self: flex-start; background: #202c33; border-bottom-left-radius: 2px; }
-        .channel-bar { background: #182229; padding: 8px; display: flex; justify-content: center; align-items: center; gap: 10px; border-top: 1px solid #3b4a54; }
-        .channel-bar input { background: #2a3942; border: 1px solid #00a884; color: white; border-radius: 5px; width: 60px; text-align: center; outline: none; }
-        .input-area { background: #202c33; padding: 12px; display: flex; align-items: center; gap: 10px; }
+
+        .input-area { 
+            background: #202c33; 
+            padding: 10px 10px calc(env(safe-area-inset-bottom) + 10px) 10px; 
+            display: flex; align-items: center; gap: 10px;
+        }
+
         input[type="text"] { flex: 1; background: #2a3942; border: none; padding: 12px; border-radius: 25px; color: white; outline: none; }
-        button { background: #00a884; border: none; width: 48px; height: 48px; border-radius: 50%; color: #0b141a; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-        #btnCalibrate { background: #3b4a54; width: 40px; height: 40px; color: white; }
-        .status-bar { font-size: 11px; background: #182229; padding: 4px; text-align: center; color: #8696a0; }
+        button { background: #00a884; border: none; width: 45px; height: 45px; border-radius: 50%; color: #0b141a; cursor: pointer; }
+        
+        .status-info { font-size: 10px; color: #8696a0; text-align: center; padding: 2px; background: #182229; }
     </style>
 </head>
 <body>
 
-<header>SonicChat ULTRA-FAST</header>
-<div class="status-bar" id="micStatus">Mode Rapide Activé (Style Ggwave)</div>
-
-<div id="chat-window">
-    <div class="bubble received">Protocole haute vitesse prêt.<br>Vitesse : ~15 car/sec.</div>
+<div id="spectrum">
+    <div id="bar-L" class="spec-bar"></div>
+    <div id="bar-M" class="spec-bar"></div>
+    <div id="bar-R" class="spec-bar"></div>
 </div>
 
-<div class="channel-bar">
-    <label style="color: #8696a0;">Canal :</label>
-    <input type="number" id="freqOffsetInput" value="0" onchange="updateOffset()">
-    <span style="color: #00a884;">Hz</span>
+<header>SonicChat WhatsApp</header>
+<div class="status-info">Protocole Ultra-Fast - Sécurisé 🔒</div>
+
+<div id="chat-window">
+    <div class="bubble received">Interface optimisée. Seuil auto-actif.</div>
 </div>
 
 <div class="input-area">
-    <button id="btnCalibrate" onclick="calibrate()">📍</button>
-    <input type="text" id="inputText" placeholder="Message ultra-rapide..." autocomplete="off">
+    <input type="text" id="inputText" placeholder="Message..." autocomplete="off">
     <button onclick="sendSound()">🚀</button>
 </div>
 
 <script>
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    let analyser, dataArray, bufferLength;
+    let analyser, dataArray;
     let isListening = false, isSending = false;
-    let dynamicThreshold = 45;
-    
-    // --- PARAMÈTRES "FAST MODE" (Type ggwave) ---
-    let FREQ_OFFSET = 0;
-    const STEP_FREQ = 40;     // Plus serré pour plus de précision
-    const CHAR_DURATION = 0.06; // 60ms au lieu de 200ms (VITESSE GG WAVE)
-    const GAP_DURATION = 0.02;  // Pause quasi inexistante
-    const BASE_DATA_FREQ = 2000; // Plus haut pour éviter les interférences
 
-    const micStatus = document.getElementById('micStatus');
-
-    function updateOffset() { FREQ_OFFSET = parseInt(document.getElementById('freqOffsetInput').value) || 0; }
-
-    function playTone(freq, startTime, duration) {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, startTime);
-        gain.gain.setValueAtTime(0, startTime);
-        gain.gain.linearRampToValueAtTime(0.5, startTime + 0.01); 
-        gain.gain.linearRampToValueAtTime(0, startTime + duration);
-        osc.connect(gain); gain.connect(audioCtx.destination);
-        osc.start(startTime); osc.stop(startTime + duration);
-    }
+    // PARAMÈTRES GG-WAVE STYLE
+    const STEP_FREQ = 40;
+    const CHAR_DURATION = 0.06; 
+    const GAP_DURATION = 0.02;
+    const BASE_DATA_FREQ = 2000;
 
     function sendSound() {
         const input = document.getElementById('inputText');
         const text = input.value.trim();
         if (!text || isSending) return;
-
         isSending = true; 
         addMessage(text, 'sent');
         input.value = '';
 
         let time = audioCtx.currentTime + 0.05;
-        
-        // Signal DEBUT (1600Hz)
-        playTone(1600 + FREQ_OFFSET, time, CHAR_DURATION);
+        playTone(1600, time, CHAR_DURATION); // START
         time += CHAR_DURATION + GAP_DURATION;
 
-        // Transmission éclair
         for (let char of text) {
-            const freq = (BASE_DATA_FREQ + FREQ_OFFSET) + (char.charCodeAt(0) * STEP_FREQ);
+            const freq = BASE_DATA_FREQ + (char.charCodeAt(0) * STEP_FREQ);
             playTone(freq, time, CHAR_DURATION);
             time += CHAR_DURATION + GAP_DURATION;
         }
-
-        // Signal FIN (1500Hz)
-        playTone(1500 + FREQ_OFFSET, time, CHAR_DURATION);
-
+        playTone(1500, time, CHAR_DURATION); // END
         setTimeout(() => { isSending = false; }, (time - audioCtx.currentTime) * 1000);
+    }
+
+    function playTone(freq, startTime, duration) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.setValueAtTime(freq, startTime);
+        gain.gain.setValueAtTime(0.4, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(startTime); osc.stop(startTime + duration);
     }
 
     async function startListening() {
         if(isListening) return;
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
-            const source = audioCtx.createMediaStreamSource(stream);
-            analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 4096; // Plus petit pour être plus réactif à la vitesse
-            source.connect(analyser);
-            bufferLength = analyser.frequencyBinCount;
-            dataArray = new Uint8Array(bufferLength);
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false } });
+        const source = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        source.connect(analyser);
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        let currentWord = "", lastCharCode = -1, gateOpen = false;
+
+        function process() {
+            analyser.getByteFrequencyData(dataArray);
             
-            let currentWord = "", lastCharTime = 0, gateOpen = false;
+            // VISUALISEUR ORANGE/VERT
+            let vol = 0; for(let i=0; i<100; i++) vol += dataArray[i];
+            let level = vol / 100;
+            const barM = document.getElementById('bar-M');
+            barM.style.background = level > 50 ? (level > 80 ? 'red' : 'orange') : '#00a884';
+            barM.style.opacity = level / 100;
 
-            function process() {
-                if (isSending) { requestAnimationFrame(process); return; }
-                analyser.getByteFrequencyData(dataArray);
+            if (!isSending) {
                 let highVal = 0, highIdx = -1;
-
-                for (let i = 100; i < bufferLength; i++) {
-                    if (dataArray[i] > highVal && dataArray[i] > dynamicThreshold) {
+                for (let i = 80; i < dataArray.length; i++) {
+                    if (dataArray[i] > highVal && dataArray[i] > 60) {
                         highVal = dataArray[i]; highIdx = i;
                     }
                 }
 
                 if (highIdx > -1) {
-                    const freq = highIdx * (audioCtx.sampleRate / 2) / bufferLength;
-                    const now = Date.now();
-
-                    // Détection DEBUT (1600Hz)
-                    if (!gateOpen && Math.abs(freq - (1600 + FREQ_OFFSET)) < 25) {
-                        gateOpen = true; lastCharTime = now;
+                    const freq = highIdx * (audioCtx.sampleRate / 2) / dataArray.length;
+                    
+                    if (!gateOpen && Math.abs(freq - 1600) < 25) {
+                        gateOpen = true; lastCharCode = -1;
                     } 
-                    // Détection FIN (1500Hz)
-                    else if (gateOpen && Math.abs(freq - (1500 + FREQ_OFFSET)) < 25) {
-                        if (now - lastCharTime > 100) {
-                            if (currentWord) addMessage(currentWord, 'received');
-                            currentWord = ""; gateOpen = false;
+                    else if (gateOpen && Math.abs(freq - 1500) < 25) {
+                        if (currentWord) addMessage(currentWord, 'received');
+                        currentWord = ""; gateOpen = false;
+                    }
+                    else if (gateOpen && freq >= BASE_DATA_FREQ - 15) {
+                        const code = Math.round((freq - BASE_DATA_FREQ) / STEP_FREQ);
+                        
+                        // --- LE FILTRE ANTI-DOUBLON QUE TU AS DEMANDÉ ---
+                        // Si le code détecté est le même que le précédent, on l'ignore (écho)
+                        if (code >= 32 && code <= 126 && code !== lastCharCode) {
+                            currentWord += String.fromCharCode(code);
+                            lastCharCode = code; 
                         }
                     }
-                    // Détection LETTRES ULTRA-RAPIDE
-                    else if (gateOpen && freq >= (BASE_DATA_FREQ + FREQ_OFFSET - 15)) {
-                        const code = Math.round((freq - (BASE_DATA_FREQ + FREQ_OFFSET)) / STEP_FREQ);
-                        if (code >= 32 && code <= 126) {
-                            // On réduit le temps de garde à 50ms pour capter le débit rapide
-                            if (now - lastCharTime > 55) { 
-                                currentWord += String.fromCharCode(code);
-                                lastCharTime = now;
-                            }
-                        }
-                    }
+                } else {
+                    // Si on n'entend rien, on reset le dernier code pour autoriser 
+                    // la même lettre si elle est vraiment répétée par l'émetteur
+                    lastCharCode = -1;
                 }
-                requestAnimationFrame(process);
             }
-            process(); isListening = true;
-        } catch (err) { console.error(err); }
-    }
-
-    function calibrate() {
-        let maxNoise = 0;
-        const check = () => {
-            analyser.getByteFrequencyData(dataArray);
-            for (let v of dataArray) if(v > maxNoise) maxNoise = v;
-        };
-        let start = Date.now();
-        const loop = () => {
-            check();
-            if(Date.now() - start < 1000) requestAnimationFrame(loop);
-            else { dynamicThreshold = maxNoise + 10; micStatus.innerText = "Seuil: " + dynamicThreshold; }
-        };
-        loop();
+            requestAnimationFrame(process);
+        }
+        process(); isListening = true;
     }
 
     function addMessage(text, type) {
@@ -181,10 +167,10 @@
         win.scrollTop = win.scrollHeight;
     }
 
-    document.body.addEventListener('click', () => {
+    document.addEventListener('click', () => {
         if (audioCtx.state === 'suspended') audioCtx.resume();
         startListening();
-    }, { once: false });
+    }, { once: true });
 </script>
 </body>
 </html>
