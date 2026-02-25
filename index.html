@@ -115,7 +115,7 @@
     <input type="text" id="inputText" placeholder="Message ultra-rapide..." autocomplete="off">
     <button onclick="sendSound()">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-            <path d="M1.101 21.757L23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"></path>
+            <path d="M1.101 21.757L23.8 12.028 1.101 2.3 l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"></path>
         </svg>
     </button>
 </div>
@@ -127,9 +127,9 @@
     let dynamicThreshold = 40;
     
     let FREQ_OFFSET = 0;
-    const STEP_FREQ = 40;  // Réduit pour plus de précision à haute vitesse
-    const CHAR_DURATION = 0.08; // 80ms : Très rapide !
-    const RAMP_TIME = 0.01;
+    const STEP_FREQ = 40; 
+    const CHAR_DURATION = 0.08; // 80ms
+    const RAMP_TIME = 0.005; // Rampes plus courtes pour plus de précision
 
     const chatWindow = document.getElementById('chat-window');
     const micStatus = document.getElementById('micStatus');
@@ -146,10 +146,9 @@
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, startTime);
         
-        // Enveloppe ultra-courte pour éviter les "clics" mais rester rapide
         gain.gain.setValueAtTime(0, startTime);
-        gain.gain.linearRampToValueAtTime(0.5, startTime + RAMP_TIME);
-        gain.gain.setValueAtTime(0.5, startTime + duration - RAMP_TIME);
+        gain.gain.linearRampToValueAtTime(0.4, startTime + RAMP_TIME);
+        gain.gain.setValueAtTime(0.4, startTime + duration - RAMP_TIME);
         gain.gain.linearRampToValueAtTime(0, startTime + duration);
         
         osc.connect(gain);
@@ -170,18 +169,15 @@
 
         let time = audioCtx.currentTime + 0.05;
         
-        // Start Tone (plus court)
         playTone(1500 + FREQ_OFFSET, time, CHAR_DURATION);
         time += CHAR_DURATION;
 
-        // Data Tones (S'enchaînent directement)
         text.split('').forEach(char => {
             const freq = (2000 + FREQ_OFFSET) + (char.charCodeAt(0) * STEP_FREQ);
             playTone(freq, time, CHAR_DURATION);
             time += CHAR_DURATION; 
         });
 
-        // End Tone
         playTone(1400 + FREQ_OFFSET, time, CHAR_DURATION);
 
         setTimeout(() => { 
@@ -198,12 +194,14 @@
             });
             const source = audioCtx.createMediaStreamSource(stream);
             analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 4096; // FFT plus petite pour être plus réactif dans le temps
+            analyser.fftSize = 2048; // FFT plus réactive pour la haute vitesse
+            analyser.smoothingTimeConstant = 0.2; // Réduit l'inertie des fréquences précédentes
             source.connect(analyser);
             bufferLength = analyser.frequencyBinCount;
             dataArray = new Uint8Array(bufferLength);
             
-            let currentWord = "", lastCharTime = 0, gateOpen = false, lastCode = -1;
+            let currentWord = "", lastCharTime = 0, gateOpen = false;
+            let lastValidatedCode = -1;
 
             function process() {
                 if (isSending || isCalibrating) { 
@@ -227,36 +225,44 @@
                     const freq = highIdx * (audioCtx.sampleRate / 2) / bufferLength;
                     const now = Date.now();
 
-                    // 1. Détection Start
-                    if (!gateOpen && Math.abs(freq - (1500 + FREQ_OFFSET)) < 30) {
+                    // Détection Start
+                    if (!gateOpen && Math.abs(freq - (1500 + FREQ_OFFSET)) < 40) {
                         gateOpen = true; 
                         lastCharTime = now;
                         currentWord = "";
+                        lastValidatedCode = -1;
                         micStatus.innerText = "🔓 Synchro";
                     } 
-                    // 2. Détection End
-                    else if (gateOpen && Math.abs(freq - (1400 + FREQ_OFFSET)) < 30) {
-                        if (now - lastCharTime > (CHAR_DURATION * 500)) {
+                    // Détection End
+                    else if (gateOpen && Math.abs(freq - (1400 + FREQ_OFFSET)) < 40) {
+                        // On attend un petit délai après le dernier caractère pour fermer
+                        if (now - lastCharTime > (CHAR_DURATION * 600)) {
                             if (currentWord) addMessage(currentWord, 'received');
                             gateOpen = false;
+                            currentWord = "";
                             micStatus.innerText = "🎤 Écoute";
                         }
                     }
-                    // 3. Détection Caractères
+                    // Détection Caractères avec verrouillage temporel strict
                     else if (gateOpen && freq >= (2000 + FREQ_OFFSET - 20)) {
                         const code = Math.round((freq - (2000 + FREQ_OFFSET)) / STEP_FREQ);
-                        // Protection contre les doublons trop rapides
+                        
+                        // Condition de validation :
+                        // 1. Le code doit être dans la table ASCII étendue
+                        // 2. Il doit s'être écoulé au moins 90% de CHAR_DURATION depuis le dernier caractère
+                        // 3. Empêche de répéter le même code instantanément à cause de l'écho
                         if (code >= 32 && code <= 255) {
-                            if (now - lastCharTime > (CHAR_DURATION * 800)) { // 80% de la durée pour valider
+                            const timeSinceLast = now - lastCharTime;
+                            if (timeSinceLast >= (CHAR_DURATION * 1000 * 0.92)) { 
                                 currentWord += String.fromCharCode(code);
                                 lastCharTime = now;
+                                lastValidatedCode = code;
                             }
                         }
                     }
                 }
                 
-                // Timeout si signal perdu
-                if (gateOpen && Date.now() - lastCharTime > 2000) {
+                if (gateOpen && Date.now() - lastCharTime > 1500) {
                     gateOpen = false;
                     micStatus.innerText = "🎤 Écoute";
                 }
@@ -279,12 +285,12 @@
             for (let i = startBin; i < bufferLength; i++) {
                 if (dataArray[i] > maxNoise) maxNoise = dataArray[i];
             }
-            if (Date.now() - startTime < 1500) requestAnimationFrame(check);
+            if (Date.now() - startTime < 1000) requestAnimationFrame(check);
             else {
-                dynamicThreshold = Math.max(35, maxNoise + 10);
+                dynamicThreshold = Math.max(30, maxNoise + 12);
                 isCalibrating = false;
                 micStatus.innerText = "✅ Prêt (" + Math.round(dynamicThreshold) + ")";
-                setTimeout(() => micStatus.innerText = "🎤 Écoute", 1500);
+                setTimeout(() => micStatus.innerText = "🎤 Écoute", 1000);
             }
         };
         check();
@@ -309,3 +315,4 @@
 </script>
 </body>
 </html>
+
