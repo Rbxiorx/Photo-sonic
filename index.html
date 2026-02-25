@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SONIC-SCAN DIRECT</title>
+    <title>SONIC-SCAN 5.5 - ULTRA SYNC</title>
     <style>
-        body { font-family: monospace; background: #000; color: #00ff00; margin: 0; overflow: hidden; }
-        #viewport { display: flex; flex-direction: column; align-items: center; padding: 10px; }
-        canvas { border: 2px solid #00ff00; width: 300px; height: 300px; background: #050505; image-rendering: pixelated; }
-        #vis { width: 100%; height: 50px; background: #000; }
-        .controls { padding: 10px; background: #111; border-top: 1px solid #004400; position: fixed; bottom: 0; width: 100%; }
-        button { background: #002200; color: #00ff00; border: 1px solid #00ff00; padding: 10px; margin: 2px; flex: 1; font-weight: bold; }
-        .ui-row { display: flex; gap: 5px; margin-bottom: 5px; }
-        #status { font-size: 10px; text-align: center; margin: 5px; color: #ffff00; }
+        body { font-family: monospace; background: #000; color: #0f0; margin: 0; overflow: hidden; }
+        #viewport { display: flex; flex-direction: column; align-items: center; padding: 10px; height: 100vh; }
+        canvas { border: 2px solid #0f0; width: 320px; height: 320px; background: #050505; image-rendering: pixelated; margin-bottom: 10px; }
+        .controls { background: #111; border-top: 1px solid #0f0; padding: 15px; width: 100%; position: fixed; bottom: 0; box-sizing: border-box; }
+        button { background: #002200; color: #0f0; border: 1px solid #0f0; padding: 12px; font-weight: bold; flex: 1; cursor: pointer; }
+        .ui-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        #status { font-size: 11px; color: #ff0; margin-bottom: 10px; text-transform: uppercase; }
+        #vis { width: 100%; height: 30px; background: #000; margin-top: 5px; }
     </style>
 </head>
 <body>
 
 <div id="viewport">
     <canvas id="mainCanvas"></canvas>
-    <div id="status">ATTENTE...</div>
+    <div id="status">SYSTÈME PRÊT</div>
     <canvas id="vis"></canvas>
 </div>
 
@@ -28,14 +28,14 @@
         <select id="res" onchange="initCanvas()" style="background:#000; color:#0f0; border:1px solid #0f0; flex:1;">
             <option value="20">20x20 (Rapide)</option>
             <option value="40" selected>40x40 (Moyen)</option>
-            <option value="60">60x60 (Lent)</option>
+            <option value="64">64x64 (Détaillé)</option>
         </select>
-        <button onclick="document.getElementById('f').click()">📁 IMAGE</button>
+        <button onclick="document.getElementById('f').click()">📷 CHARGER</button>
     </div>
     <div class="ui-row">
-        <button id="btnRadar" onclick="startMic()">📡 ACTIVER RÉCEPTION</button>
-        <button id="btnSend" onclick="send()" style="display:none; background:#004400;">🚀 ENVOYER</button>
-        <button onclick="location.reload()">🔄 RESET</button>
+        <button id="btnRadar" onclick="startMic()">📡 ACTIVER RADAR</button>
+        <button id="btnSend" onclick="send()" style="display:none; background:#040;">🚀 ÉMETTRE</button>
+        <button onclick="location.reload()" style="flex:0.5;">🔄</button>
     </div>
     <input type="file" id="f" accept="image/*" onchange="loadImg(event)" style="display:none">
 </div>
@@ -50,10 +50,12 @@ const vCtx = vCanvas.getContext('2d');
 let size = 40;
 let sourceImg = null;
 let isRx = false;
-const F_START = 18000; // Fréquence de base
-const F_SYNC = 17500;  // Fréquence de synchro ligne
-const STEP = 30; 
-const DUR = 0.04; // Durée par pixel
+
+// Fréquences sécurisées pour éviter les bruits ambiants
+const F_SYNC = 17000;  // Signal de début de ligne (TRES IMPORTANT)
+const F_START = 18000; // Fréquence pour Pixel Noir
+const STEP = 25;       // Écart entre chaque nuance de gris
+const DUR = 0.05;      // Temps par pixel (un peu plus lent pour la stabilité)
 
 function initCanvas() {
     size = parseInt(document.getElementById('res').value);
@@ -69,68 +71,71 @@ function loadImg(e) {
         sourceImg.onload = () => {
             ctx.drawImage(sourceImg, 0, 0, size, size);
             document.getElementById('btnSend').style.display = "block";
-            document.getElementById('status').innerText = "IMAGE PRÊTE. TEMPS: " + (size*size*DUR).toFixed(0) + "s";
+            document.getElementById('status').innerText = "IMAGE CHARGÉE";
         };
         sourceImg.src = ev.target.result;
     };
     r.readAsDataURL(e.target.files[0]);
 }
 
-// CONFIGURATION MICRO SANS RESTRICTIONS
 async function startMic() {
     await audioCtx.resume();
+    // On force la désactivation de TOUT traitement logiciel qui déforme le son
     const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { 
-            echoCancellation: false, 
-            noiseSuppression: false, 
-            autoGainControl: false 
-        } 
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
     });
     
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 4096; // Haute résolution pour détecter les fréquences
+    analyser.fftSize = 2048; 
     source.connect(analyser);
     const data = new Uint8Array(analyser.frequencyBinCount);
     
-    document.getElementById('btnRadar').innerText = "📡 RÉCEPTION ACTIVE";
-    document.getElementById('status').innerText = "À L'ÉCOUTE...";
+    document.getElementById('btnRadar').innerText = "📡 RADAR ON";
+    document.getElementById('status').innerText = "ÉCOUTE EN COURS...";
 
     let x = 0, y = 0;
+    let lastSyncTime = 0;
 
     function loop() {
         analyser.getByteFrequencyData(data);
         
-        // Visualizer
+        // Visualiseur de signal
         vCanvas.width = vCanvas.clientWidth;
-        vCtx.fillStyle="#000"; vCtx.fillRect(0,0,vCanvas.width, 50);
+        vCtx.fillStyle="#000"; vCtx.fillRect(0,0,vCanvas.width, 30);
         vCtx.fillStyle="#0f0";
-        for(let i=0; i<100; i++) vCtx.fillRect(i*(vCanvas.width/100), 50, 2, -data[i+500]/4);
+        for(let i=0; i<data.length; i+=10) vCtx.fillRect(i/2, 30, 1, -data[i]/4);
 
-        // Détection Fréquence Dominante
-        let maxV = 0, maxF = 0;
+        let maxV = 0, maxFIdx = 0;
         for(let i=0; i<data.length; i++) {
-            if(data[i] > maxV) { maxV = data[i]; maxF = i; }
+            if(data[i] > maxV) { maxV = data[i]; maxFIdx = i; }
         }
         
-        const freq = maxF * (audioCtx.sampleRate / 2) / data.length;
+        const freq = maxFIdx * (audioCtx.sampleRate / 2) / data.length;
 
-        if (maxV > 80) { // Sensibilité
-            // Détection Synchro Ligne (ou début)
-            if (Math.abs(freq - F_SYNC) < 50) {
-                isRx = true;
-                if(x >= size-1) { x=0; y++; } 
+        if (maxV > 100) { 
+            // DÉTECTION DE LA SYNCHRO (RESET DE LA LIGNE)
+            if (Math.abs(freq - F_SYNC) < 60) {
+                const now = Date.now();
+                if (now - lastSyncTime > 100) { // Anti-rebond
+                    x = 0; 
+                    if (isRx) y++;
+                    isRx = true;
+                    lastSyncTime = now;
+                    document.getElementById('status').innerText = `RÉCEPTION LIGNE ${y+1}`;
+                }
             } 
-            // Détection Pixel
-            else if (isRx && freq >= F_START && freq < 22000) {
+            // DÉTECTION PIXEL
+            else if (isRx && freq >= F_START && freq < 21000) {
                 const val = Math.round((freq - F_START) / STEP);
                 ctx.fillStyle = `rgb(${val},${val},${val})`;
                 ctx.fillRect(x, y, 1, 1);
                 x++;
-                if(x >= size) { x = 0; y++; }
-                if(y >= size) { isRx = false; x=0; y=0; }
+                if(x >= size) { x = 0; } // On attend la prochaine synchro pour changer de ligne
             }
         }
+
+        if(y >= size) { isRx = false; document.getElementById('status').innerText = "TERMINÉ"; }
         requestAnimationFrame(loop);
     }
     loop();
@@ -138,15 +143,13 @@ async function startMic() {
 
 function send() {
     const pixels = ctx.getImageData(0, 0, size, size).data;
-    let now = audioCtx.currentTime + 0.1;
-
-    // Sourdine micro pendant envoi
-    document.getElementById('status').innerText = "ÉMISSION EN DIRECT...";
+    let now = audioCtx.currentTime + 0.2;
+    document.getElementById('status').innerText = "TRANSMISSION...";
     
     for (let y = 0; y < size; y++) {
-        // Un bip de synchro au début de chaque ligne
-        play(F_SYNC, now, 0.05);
-        now += 0.06;
+        // SIGNAL DE SYNCHRO : Plus long et plus fort pour caler l'autre téléphone
+        play(F_SYNC, now, 0.1); 
+        now += 0.12; 
 
         for (let x = 0; x < size; x++) {
             const i = (y * size + x) * 4;
@@ -162,7 +165,7 @@ function play(f, s, d) {
     const g = audioCtx.createGain();
     o.frequency.setValueAtTime(f, s);
     g.gain.setValueAtTime(0, s);
-    g.gain.linearRampToValueAtTime(0.5, s + 0.005);
+    g.gain.linearRampToValueAtTime(0.7, s + 0.005);
     g.gain.linearRampToValueAtTime(0, s + d);
     o.connect(g); g.connect(audioCtx.destination);
     o.start(s); o.stop(s + d);
